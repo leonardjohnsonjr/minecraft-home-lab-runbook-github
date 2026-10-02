@@ -1731,6 +1731,126 @@ Address: 10.1.1.116
 Port:    19132
 ```
 
+## Bedrock Fails to Start with `exec format error`
+
+A Bedrock container may fail immediately after downloading a new server version with an error similar to:
+
+```text
+ERROR mc-server-runner Failed to start {"error": "fork/exec ./bedrock_server-1.26.52.3: exec format error"}
+```
+
+This error can occur when the Bedrock server executable in the persistent `/data` volume is incomplete or corrupted. In the verified incident, the downloaded executable existed but was **0 bytes**, so Linux had no valid binary to execute.
+
+### Confirm the Problem
+
+Check the host architecture:
+
+```bash
+uname -m
+```
+
+Expected on this system:
+
+```text
+x86_64
+```
+
+Inspect the Bedrock executable that appears in the error message. Replace the version in the filename when necessary:
+
+```bash
+sudo file \
+  /var/lib/docker/volumes/minecraft_bedrock-data/_data/bedrock_server-1.26.52.3
+```
+
+Check its size:
+
+```bash
+sudo ls -lh \
+  /var/lib/docker/volumes/minecraft_bedrock-data/_data/bedrock_server-1.26.52.3
+```
+
+A failed download may look like:
+
+```text
+/var/lib/docker/volumes/minecraft_bedrock-data/_data/bedrock_server-1.26.52.3: empty
+-rwxr-xr-x 1 minecraftadmin minecraftadmin 0 ... bedrock_server-1.26.52.3
+```
+
+A `0` byte executable confirms that the server download did not complete correctly.
+
+### Fix
+
+Stop the Bedrock service:
+
+```bash
+cd /srv/minecraft
+sudo docker-compose stop minecraft-bedrock
+```
+
+Delete **only the zero-byte Bedrock executable** identified in the error:
+
+```bash
+sudo rm \
+  /var/lib/docker/volumes/minecraft_bedrock-data/_data/bedrock_server-1.26.52.3
+```
+
+Do not delete the world directory, named Docker volume, or other files under `/data`.
+
+Start Bedrock again:
+
+```bash
+sudo docker-compose up -d minecraft-bedrock
+```
+
+The container should detect that the executable is missing and download it again.
+
+Follow startup logs:
+
+```bash
+sudo docker logs -f mc-bedrock
+```
+
+A successful startup should progress beyond the `mc-server-runner` error and eventually show messages similar to:
+
+```text
+Starting Bedrock server...
+Starting Server
+Version: 1.26.52.3
+Server started.
+```
+
+Press `Ctrl+C` to stop following the logs. This does not stop the container.
+
+### Verify the Replacement Binary
+
+Confirm that the new executable is no longer empty:
+
+```bash
+sudo ls -lh \
+  /var/lib/docker/volumes/minecraft_bedrock-data/_data/bedrock_server-1.26.52.3
+```
+
+Then confirm that Linux recognizes it as an executable binary:
+
+```bash
+sudo file \
+  /var/lib/docker/volumes/minecraft_bedrock-data/_data/bedrock_server-1.26.52.3
+```
+
+The file should have a non-zero size and should be identified as an x86-64 ELF executable rather than `empty`.
+
+### If the Download Fails Again
+
+If the replacement file is again zero bytes or the container repeatedly fails while retrieving the same Bedrock release:
+
+1. Stop the Bedrock container.
+2. Remove the failed zero-byte executable again.
+3. Review the container logs for download or network errors.
+4. Consider temporarily pinning the last known-good Bedrock version in `compose.yaml` instead of using `VERSION=LATEST`.
+5. Recreate the Bedrock container and verify startup before allowing users to reconnect.
+
+Do not delete the Docker volume to solve this problem. The world and configuration are stored separately from the failed Bedrock executable inside the same persistent volume.
+
 ## Local Works but Remote Fails
 
 Check Playit:
